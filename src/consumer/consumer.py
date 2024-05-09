@@ -57,7 +57,7 @@ def main():
     global services_last_timestamp
     services_last_timestamp = {}
     global error_sent
-    error_sent = False
+    error_sent = {}
 
     # pylance lies, callbacks call 4 args
     def heartbeat_callback(ch, method, properties, body):
@@ -101,9 +101,9 @@ def main():
             es.index(index="heartbeat-rabbitmq", body=json_message)
             services_last_timestamp[json_data["service"]] = json_data["timestamp"]
             global error_sent
-            if error_sent:
+            if error_sent.get(json_data["service"], False):
                 send_error_email(json_data["service"], json_data["timestamp"], '503', 'up')
-                error_sent = False
+                error_sent[json_data["service"]] = False
         except Exception as e:
             print(f"\33[31mError indexing to Elasticsearch: {e}\33[0m")
     
@@ -119,6 +119,7 @@ def main():
         try:
             publish_to_rabbitmq(email_content)
             print("Email content published to RabbitMQ successfully.")
+            error_sent[service] = True
         except Exception as e:
             print(f"Error publishing email content to RabbitMQ: {e}")
 
@@ -135,7 +136,7 @@ def main():
             # this means we haven't received a heartbeat in 10s since the last one was sent
             # -5s so afterwards it will be every 5s like they send us ups (for accumulative uptime) but still give them 3s room
             if current_timestamp - int(services_last_timestamp[service]) >= 10:
-                if not error_sent:
+                if not error_sent.get(service, False):
                     heartbeat_callback(
                         None,
                         None,
@@ -149,10 +150,10 @@ def main():
                             "utf-8"
                         ),
                     )
-                print(f"Didn't received heartbeat in 2s from {service}")
-                send_error_email(service, current_timestamp,'503', 'down')
-                error_sent = True
-                time.sleep(1)
+                    print(f"Didn't received heartbeat in 2s from {service}")
+                    send_error_email(service, current_timestamp,'503', 'down')
+                    error_sent[service] = True
+                    time.sleep(1)
 
     def publish_to_rabbitmq(channel, email_content):
         channel.basic_publish(
